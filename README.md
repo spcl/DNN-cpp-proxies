@@ -1,5 +1,5 @@
 # deep-nn-proxy
-C++/MPI proxies for deep neural networks, including `ResNet-50`, `BERT-large`, and `GPT2-large`.
+C++/MPI proxies for distributed training of deep neural networks, including `ResNet-50`, `BERT-large`, and `GPT2-large`. These proxies cover data parallelism, pipeline parallelism, and a hybrid of pipeline and data parallelism.
 
 ## Demo
 Compile:
