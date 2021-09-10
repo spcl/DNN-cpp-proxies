@@ -24,7 +24,7 @@
 #define BEGINNUM 14
 #define INTERNUM 12
 #define ENDNUM 15
-//sizes for the gradients per layer of gpt-2 large, 1280-hidden, 20-heads
+//sizes for the gradients per layer of gpt-2
 int first_layer_grad_sizes[BEGINNUM] = {64328960, 1310720, 1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 3840, 1280, 1280, 5120, 1280};
 int intermediate_layer_grad_sizes[INTERNUM] = {1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 3840, 1280, 1280, 5120, 1280};
 int end_layer_grad_sizes[ENDNUM] = {1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 64328960, 1280, 3840, 1280, 1280, 5120, 1280, 1280};
@@ -121,7 +121,7 @@ int main(int argc, char *argv[]){
     double begin, elapse;
     
     //number of basic Transformer layers
-    int num_layer = 36;
+    int num_layer = 8;
     //number of pipeline stages
     int num_stage = 4;
     //number of micro-batches in an iteration
@@ -162,8 +162,6 @@ int main(int argc, char *argv[]){
 
 
     int num_layer_per_stage = (int)(num_layer/num_stage);
-    //printf("num_layer = %d, num_stage = %d, num_layer_per_stage = %d \n", num_layer, num_stage, num_layer_per_stage);
-    //printf("Global rank = %d, allreduce group size/rank = %d, %d, p2p group size/rank = %d, %d\n", rank, allreduce_group_size, allreduce_group_rank, p2p_group_size, p2p_group_rank);
 
     int begin_stage_grad_num = BEGINNUM + (num_layer_per_stage - 1)*INTERNUM;
     int end_stage_grad_num = ENDNUM + (num_layer_per_stage - 1)*INTERNUM;

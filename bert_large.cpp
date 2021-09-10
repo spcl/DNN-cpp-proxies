@@ -24,7 +24,7 @@
 #define BEGINNUM 21
 #define INTERNUM 16
 #define ENDNUM 26
-//sizes for the gradients per layer of bert-large, 1024-hidden, 16-heads
+//sizes for the gradients per layer of bert
 int first_layer_grad_sizes[BEGINNUM] = {31254528, 524288, 2048, 1048576, 1048576, 1048576, 1048576, 4194304, 4194304, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 4096, 1024, 1024, 1024};
 int intermediate_layer_grad_sizes[INTERNUM] = {1048576, 1048576, 1048576, 1048576, 4194304, 4194304, 1024, 1024, 1024, 1024, 1024, 1024, 4096, 1024, 1024, 1024};
 int end_layer_grad_sizes[ENDNUM] = {1048576, 1048576, 1048576, 1048576, 4194304, 4194304, 1048576, 1048576, 31254528, 2048, 1024, 1024, 1024, 1024, 1024, 1024, 4096, 1024, 1024, 1024, 1024, 30522, 1024, 1024, 1024, 2};
@@ -122,7 +122,7 @@ int main(int argc, char *argv[]){
     double begin, elapse;
 
     //number of basic Transformer layers
-    int num_layer = 24;
+    int num_layer = 8;
     //number of pipeline stages
     int num_stage = 4;
     //number of micro-batches in an iteration
@@ -163,8 +163,6 @@ int main(int argc, char *argv[]){
 
 
     int num_layer_per_stage = (int)(num_layer/num_stage);
-    //printf("num_layer = %d, num_stage = %d, num_layer_per_stage = %d \n", num_layer, num_stage, num_layer_per_stage);
-    //printf("Global rank = %d, allreduce group size/rank = %d, %d, p2p group size/rank = %d, %d\n", rank, allreduce_group_size, allreduce_group_rank, p2p_group_size, p2p_group_rank);
 
     int begin_stage_grad_num = BEGINNUM + (num_layer_per_stage - 1)*INTERNUM;
     int end_stage_grad_num = ENDNUM + (num_layer_per_stage - 1)*INTERNUM;
