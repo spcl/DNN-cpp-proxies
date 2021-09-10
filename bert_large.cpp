@@ -285,7 +285,7 @@ int main(int argc, char *argv[]){
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
-    printf("Rank = %d, world_size = %d, layers = %d, stages = %d, total_params = %d, Bert-large pipeline runtime for each iteration = %f s\n", rank, world_size, num_layer, num_stage, BEGINSIZE+ENDSIZE+INTERSIZE*(num_layer-2), elapse);
+    printf("Rank = %d, world_size = %d, layers = %d, stages = %d, total_params = %d, Bert-large pipeline and data parallelism runtime for each iteration = %f s\n", rank, world_size, num_layer, num_stage, BEGINSIZE+ENDSIZE+INTERSIZE*(num_layer-2), elapse);
 
     MPI_Finalize();
 }
