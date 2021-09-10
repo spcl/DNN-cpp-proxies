@@ -1,5 +1,5 @@
 # deep-nn-proxy
-C++/MPI proxies for deep neural networks.
+C++/MPI proxies for deep neural networks, including `ResNet-50`, `BERT-large`, and `GPT2-large`.
 
 ## Demo
 Compile:
