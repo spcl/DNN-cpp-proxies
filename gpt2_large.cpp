@@ -121,7 +121,7 @@ int main(int argc, char *argv[]){
     double begin, elapse;
     
     //number of basic Transformer layers
-    int num_layer = 8;
+    int num_layer = 48;
     //number of pipeline stages
     int num_stage = 4;
     //number of micro-batches in an iteration
