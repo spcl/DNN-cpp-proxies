@@ -196,7 +196,8 @@ int main(int argc, char *argv[]){
         num_grad_per_stage = num_layer_per_stage * INTERNUM;
     }
 
-    int stage_grad_sizes[num_grad_per_stage] = {0}; 
+    //int stage_grad_sizes[num_grad_per_stage] = {0}; 
+    int stage_grad_sizes[num_grad_per_stage]; 
 
     if(stage_id == 0){
         for(int i=0; i<BEGINNUM; i++){
@@ -266,6 +267,7 @@ int main(int argc, char *argv[]){
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
+    //printf("num_msg: begin_layer %d, inter_layer %d, end_layer %d \n", BEGINNUM, INTERNUM, ENDNUM);
     printf("Rank = %d, world_size = %d, layers = %d, stages = %d, total_params = %d, GPT2-large pipeline and data parallelism runtime for each iteration = %f s\n", rank, world_size, num_layer, num_stage, BEGINSIZE+ENDSIZE+INTERSIZE*(num_layer-2), elapse);
 
     MPI_Finalize();
