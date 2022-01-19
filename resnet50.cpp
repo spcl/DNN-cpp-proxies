@@ -15,7 +15,28 @@
 
 #define RUNS 512
 #define WARM_UP 10
+#define TOTALSIZE 25559081
+#define MSGAGG 1
 
+#ifdef MSGAGG
+//message aggregation
+#define NUM 6
+
+//pointers of the send/receive buffers
+float* grad_ptrs[NUM];
+float* sum_grad_ptrs[NUM];
+
+//sizes for the gradients
+int msgSize[NUM] = {
+3104745,
+4461568,
+4462592,
+4986880,
+4468736,
+4074560
+};
+
+#else
 //number of trainable parameters in ResNet-50
 #define NUM 161
 
@@ -187,25 +208,7 @@ int msgSize[NUM] = {
 64,
 9408
 };
-
-#define TOTALSIZE 25559081
-
-////message aggregation
-//#define NUM 6
-//
-////pointers of the send/receive buffers
-//float* grad_ptrs[NUM];
-//float* sum_grad_ptrs[NUM];
-//
-////sizes for the gradients
-//int msgSize[NUM] = {
-//3104745,
-//4461568,
-//4462592,
-//4986880,
-//4468736,
-//4074560
-//};
+#endif
 
 
 //allreduce
@@ -259,6 +262,9 @@ int main(int argc, char *argv[]){
     elapse = (MPI_Wtime()-begin)/RUNS;
     printf("Rank = %d, world_size = %d, total_params = %d, ResNet-50 data parallelism (allreduce) runtime for each iteration = %f s\n", rank, world_size, TOTALSIZE, elapse);
 
+    //for(int i=0; i<NUM; i++){
+    //    printf("msgsize[%d] = %d\n", i, msgSize[i]);
+    //}
 
     //warmup
     for(int i=0; i<WARM_UP; i++){

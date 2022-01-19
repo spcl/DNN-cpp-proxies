@@ -21,6 +21,22 @@
 //p2p msg size for GPT-2 with micro-batch size=1 and seq_length=632
 #define P2PSIZE 808960
 
+#define BEGINSIZE 85317120
+#define INTERSIZE 19677440
+#define ENDSIZE 84008960
+
+#define MSGAGG 1
+
+#ifdef MSGAGG
+//message aggregation
+#define BEGINNUM 1
+#define INTERNUM 1
+#define ENDNUM 1
+int first_layer_grad_sizes[BEGINNUM] = {BEGINSIZE};
+int intermediate_layer_grad_sizes[INTERNUM] = {INTERSIZE};
+int end_layer_grad_sizes[ENDNUM] = {ENDSIZE};
+
+#else
 #define BEGINNUM 14
 #define INTERNUM 12
 #define ENDNUM 15
@@ -29,17 +45,9 @@ int first_layer_grad_sizes[BEGINNUM] = {64328960, 1310720, 1280, 4915200, 163840
 int intermediate_layer_grad_sizes[INTERNUM] = {1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 3840, 1280, 1280, 5120, 1280};
 int end_layer_grad_sizes[ENDNUM] = {1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 64328960, 1280, 3840, 1280, 1280, 5120, 1280, 1280};
 
-#define BEGINSIZE 85317120
-#define INTERSIZE 19677440
-#define ENDSIZE 84008960
+#endif
 
-////message aggregation
-//#define BEGINNUM 1
-//#define INTERNUM 1
-//#define ENDNUM 1
-//int first_layer_grad_sizes[BEGINNUM] = {BEGINSIZE};
-//int intermediate_layer_grad_sizes[INTERNUM] = {INTERSIZE};
-//int end_layer_grad_sizes[ENDNUM] = {ENDSIZE};
+
 
 int run_pipeline(int grad_acc_step, int stage_id, int num_grad_per_stage, 
 		 int num_stage, int allreduce_group_size, 

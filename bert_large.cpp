@@ -21,6 +21,22 @@
 //p2p msg size for Bert with micro-batch size=8 and seq_length=128
 #define P2PSIZE 1049600
 
+#define BEGINSIZE 44379136
+#define INTERSIZE 12596224
+#define ENDSIZE 45984572
+
+#define MSGAGG 1
+
+#ifdef MSGAGG
+//message aggregation
+#define BEGINNUM 1
+#define INTERNUM 1
+#define ENDNUM 1
+int first_layer_grad_sizes[BEGINNUM] = {BEGINSIZE};
+int intermediate_layer_grad_sizes[INTERNUM] = {INTERSIZE};
+int end_layer_grad_sizes[ENDNUM] = {ENDSIZE};
+
+#else
 #define BEGINNUM 21
 #define INTERNUM 16
 #define ENDNUM 26
@@ -29,18 +45,9 @@ int first_layer_grad_sizes[BEGINNUM] = {31254528, 524288, 2048, 1048576, 1048576
 int intermediate_layer_grad_sizes[INTERNUM] = {1048576, 1048576, 1048576, 1048576, 4194304, 4194304, 1024, 1024, 1024, 1024, 1024, 1024, 4096, 1024, 1024, 1024};
 int end_layer_grad_sizes[ENDNUM] = {1048576, 1048576, 1048576, 1048576, 4194304, 4194304, 1048576, 1048576, 31254528, 2048, 1024, 1024, 1024, 1024, 1024, 1024, 4096, 1024, 1024, 1024, 1024, 30522, 1024, 1024, 1024, 2};
 
+#endif
 
-#define BEGINSIZE 44379136
-#define INTERSIZE 12596224
-#define ENDSIZE 45984572
 
-////message aggregation
-//#define BEGINNUM 1
-//#define INTERNUM 1
-//#define ENDNUM 1
-//int first_layer_grad_sizes[BEGINNUM] = {BEGINSIZE};
-//int intermediate_layer_grad_sizes[INTERNUM] = {INTERSIZE};
-//int end_layer_grad_sizes[ENDNUM] = {ENDSIZE};
 
 int run_pipeline(int grad_acc_step, int stage_id, int num_grad_per_stage, 
 		 int num_stage, int allreduce_group_size, 
