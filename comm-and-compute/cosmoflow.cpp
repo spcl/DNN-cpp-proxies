@@ -253,7 +253,7 @@ int main(int argc, char *argv[]){
 
     if(rank == 0){
         printf("Rank = %d, world_size = %d, model_shards = %d, data_shards = %d, total_params = %d, global_batch_size = %d. \n", rank, world_size, mp_group_size, dense_allreduce_group_size, total_params, 8*dense_allreduce_group_size);
-        printf("CosmoFlow model-data parallelism runtime for each iteration = %f s.\n", elapse);
+        printf("CosmoFlow with a hybrid of model and data parallelism runtime for each iteration = %f s.\n", elapse);
     }
 
     MPI_Finalize();
