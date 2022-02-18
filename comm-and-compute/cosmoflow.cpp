@@ -64,7 +64,7 @@ int run_model_data_parallel(float** fwd_halo_send_buff0_ptrs,
                             float** sum_grad_ptrs,
 		            MPI_Comm model_parallel_comm,
 		            MPI_Comm dense_allreduce_comm,
-			    MPI_Comm* conv_allreduce_comms){
+		            MPI_Comm* conv_allreduce_comms){
 
     
     //forward
@@ -90,6 +90,9 @@ int run_model_data_parallel(float** fwd_halo_send_buff0_ptrs,
     
     //backward
     MPI_Request grad_allreduce_reqs[NUM_Conv_L+1];
+    for(int i=0; i<NUM_Conv_L+1; i++)
+        grad_allreduce_reqs[i] = MPI_REQUEST_NULL;
+
     int index, flag;
     for(int i=0; i<NUM_L; i++){
 	if(i > NUM_Dense_L)
@@ -114,8 +117,7 @@ int run_model_data_parallel(float** fwd_halo_send_buff0_ptrs,
             MPI_Iallreduce(grad_ptrs[0], sum_grad_ptrs[0], allreduce_sizes[0], MPI_FLOAT, MPI_SUM, dense_allreduce_comm, &grad_allreduce_reqs[0]);	
 	}
 	else if(i > NUM_Dense_L-1){
-            MPI_Iallreduce(grad_ptrs[i-NUM_Dense_L+1], sum_grad_ptrs[i-NUM_Dense_L+1], allreduce_sizes[i-NUM_Dense_L+1], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i-NUM_Dense_L+1], &grad_allreduce_reqs[i-NUM_Dense_L+1]);	
-	
+            MPI_Iallreduce(grad_ptrs[i-NUM_Dense_L+1], sum_grad_ptrs[i-NUM_Dense_L+1], allreduce_sizes[i-NUM_Dense_L+1], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i-NUM_Dense_L], &grad_allreduce_reqs[i-NUM_Dense_L+1]);	
 	}
     }
 
