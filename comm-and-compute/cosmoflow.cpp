@@ -21,6 +21,7 @@
 #define NUM_L 8
 // we set model shards = 4
 // batchsize = 8
+// suggest world_size <= 4096, which is corresponding to a global batch_size <= 8192
 // A100 GPU
 // runtime in us (10E-6) for each model shard 
 int fwd_rt_per_layer[NUM_L] = {6567, 13135, 6567, 3283, 1641, 5, 3, 1};
