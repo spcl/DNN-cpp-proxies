@@ -15,11 +15,10 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 8
-#define WARM_UP 2
+#define RUNS 128
+#define WARM_UP 8
 
-//#define NUM_L 96
-#define NUM_L 4
+#define NUM_L 96
 #define ACC_STEP_SCALE 1
 #define MODEL_SHARDS 4
 
@@ -282,7 +281,46 @@ int main(int argc, char *argv[]){
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
-    printf("1F1B Rank = %d, world_size = %d, layers = %d, stages = %d, acc_step = %d, total_params = %d Billions, GPT-3 DP-MP-PP runtime for each iteration = %f s\n", rank, world_size, NUM_L, num_stage, grad_acc_step, 1811939328/1024*NUM_L/1024/1024, elapse);
+    if(rank == 0)
+        printf("1F1B: Rank = %d, world_size = %d, layers = %d, stages = %d, acc_step = %d, total_params = %d B, global batch = %d, GPT-3 DP-MP-PP runtime for each iteration = %f s\n", rank, world_size, NUM_L, num_stage, grad_acc_step, 1811939328/1024*NUM_L/1024/1024, world_size*ACC_STEP_SCALE/MODEL_SHARDS, elapse);
 
+    //warmup
+    for(int wmp = 0; wmp < WARM_UP; wmp++){
+        run_data_model_gpipe(grad_acc_step, stage_id, num_stage,
+        		    grad_ptr,
+                            sum_grad_ptr,
+                            fwd_send_buff,
+                            fwd_recv_buff,
+                            bwd_send_buff,
+                            bwd_recv_buff,
+                            mp_fwd_inter_ptrs,
+                            sum_mp_fwd_inter_ptrs,
+                            mp_bwd_grad_ptrs,
+                            sum_mp_bwd_grad_ptrs,
+                            dp_allreduce_comm,
+                            mp_allreduce_comm,
+                            pp_p2p_comm);
+    }
+
+    begin = MPI_Wtime();
+    for(int iter = 0; iter < RUNS; iter++){
+        run_data_model_gpipe(grad_acc_step, stage_id, num_stage,
+        		    grad_ptr,
+                            sum_grad_ptr,
+                            fwd_send_buff,
+                            fwd_recv_buff,
+                            bwd_send_buff,
+                            bwd_recv_buff,
+                            mp_fwd_inter_ptrs,
+                            sum_mp_fwd_inter_ptrs,
+                            mp_bwd_grad_ptrs,
+                            sum_mp_bwd_grad_ptrs,
+                            dp_allreduce_comm,
+                            mp_allreduce_comm,
+                            pp_p2p_comm);
+    }
+    elapse = (MPI_Wtime()-begin)/RUNS;
+    if(rank == 0)
+        printf("GPipe: Rank = %d, world_size = %d, layers = %d, stages = %d, acc_step = %d, total_params = %d B, global batch = %d, GPT-3 DP-MP-PP runtime for each iteration = %f s\n", rank, world_size, NUM_L, num_stage, grad_acc_step, 1811939328/1024*NUM_L/1024/1024, world_size*ACC_STEP_SCALE/MODEL_SHARDS, elapse);
     MPI_Finalize();
 }
