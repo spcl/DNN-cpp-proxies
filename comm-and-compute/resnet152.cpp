@@ -23,6 +23,7 @@
 int allreduce_sizes[NUM_B] = {6511592, 6567936, 5905920, 6113280, 6176256, 6112768, 6176256, 6112768, 5321216, 5194816};
 
 // batchsize = 128
+// Suggest world_size <= 256, which is corresponding to a global batch_size <= 32 K
 // A100 GPU
 // runtime in us (10E-6) for each iteration 
 int fwd_rt_whole_model = 119000;
