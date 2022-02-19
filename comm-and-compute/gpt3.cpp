@@ -241,7 +241,6 @@ int main(int argc, char *argv[]){
         moe_bwd_alltoall_ptrs[i] = (float *)calloc(MOE_ALL2ALL_SIZE, sizeof(float));
     }
 
-    printf("begin\n");
     MPI_Barrier(MPI_COMM_WORLD);
 
     //warmup
