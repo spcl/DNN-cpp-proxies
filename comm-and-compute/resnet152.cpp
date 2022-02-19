@@ -1,283 +1,97 @@
-/***************************************************************************************
+/*********************************************************************
  *
- * Description: C++/MPI proxy for ResNet-50 distributed training with data parallelism
+ * Description: C++/MPI proxy for ResNet-152 distributed training 
+ *              with data parallelism
  * Author: Shigang Li
  * Email: shigangli.cs@gmail.com
  *
- ***************************************************************************************/
+ *********************************************************************/
 
-#include "mpi.h"
+#include <mpi.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string>
 #include <time.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #define RUNS 512
 #define WARM_UP 10
-#define TOTALSIZE 25559081
-#define MSGAGG 1
 
-#ifdef MSGAGG
-//message aggregation
-#define NUM 6
+// allreduce sizes for gradients with message aggregation
+#define NUM_B 10
+int allreduce_sizes[NUM_B] = {6511592, 6567936, 5905920, 6113280, 6176256, 6112768, 6176256, 6112768, 5321216, 5194816};
 
-//pointers of the send/receive buffers
-float* grad_ptrs[NUM];
-float* sum_grad_ptrs[NUM];
+// batchsize = 128
+// A100 GPU
+// runtime in us (10E-6) for each iteration 
+int fwd_rt_whole_model = 119000;
+int bwd_rt_per_B = 23800;
 
-//sizes for the gradients
-int msgSize[NUM] = {
-3104745,
-4461568,
-4462592,
-4986880,
-4468736,
-4074560
-};
+int run_data_parallel(float** grad_ptrs, float** sum_grad_ptrs, MPI_Comm* conv_allreduce_comms){
+    
+    //forward
+    usleep(fwd_rt_whole_model); //compute
 
-#else
-//number of trainable parameters in ResNet-50
-#define NUM 161
+    //backward
+    MPI_Request grad_allreduce_reqs[NUM_B];
+    for(int i=0; i<NUM_B; i++)
+        grad_allreduce_reqs[i] = MPI_REQUEST_NULL;
 
-//pointers of the send/receive buffers
-float* grad_ptrs[NUM];
-float* sum_grad_ptrs[NUM];
+    int index, flag;
+    for(int i=0; i<NUM_B; i++){
+	if(i > 1)
+            MPI_Testany(NUM_B, grad_allreduce_reqs, &index, &flag, MPI_STATUSES_IGNORE); //advancing MPI in the background
 
-//sizes for the gradients
-int msgSize[NUM] = {
-1001,
-2050048,
-2048,
-2048,
-1048576,
-512,
-512,
-2359296,
-512,
-512,
-1048576,
-2048,
-2048,
-1048576,
-512,
-512,
-2359296,
-512,
-512,
-1048576,
-2048,
-2048,
-1048576,
-512,
-512,
-2359296,
-512,
-512,
-524288,
-2048,
-2048,
-2097152,
-1024,
-1024,
-262144,
-256,
-256,
-589824,
-256,
-256,
-262144,
-1024,
-1024,
-262144,
-256,
-256,
-589824,
-256,
-256,
-262144,
-1024,
-1024,
-262144,
-256,
-256,
-589824,
-256,
-256,
-262144,
-1024,
-1024,
-262144,
-256,
-256,
-589824,
-256,
-256,
-262144,
-1024,
-1024,
-262144,
-256,
-256,
-589824,
-256,
-256,
-262144,
-1024,
-1024,
-262144,
-256,
-256,
-589824,
-256,
-256,
-131072,
-1024,
-1024,
-524288,
-512,
-512,
-65536,
-128,
-128,
-147456,
-128,
-128,
-65536,
-512,
-512,
-65536,
-128,
-128,
-147456,
-128,
-128,
-65536,
-512,
-512,
-65536,
-128,
-128,
-147456,
-128,
-128,
-65536,
-512,
-512,
-65536,
-128,
-128,
-147456,
-128,
-128,
-32768,
-512,
-512,
-131072,
-256,
-256,
-16384,
-64,
-64,
-36864,
-64,
-64,
-16384,
-256,
-256,
-16384,
-64,
-64,
-36864,
-64,
-64,
-16384,
-256,
-256,
-16384,
-64,
-64,
-36864,
-64,
-64,
-4096,
-256,
-256,
-16384,
-64,
-64,
-9408
-};
-#endif
+        usleep(bwd_rt_per_B); //compute
 
-
-//allreduce
-int run_allreduce(){
-    for(int i=0; i<NUM; i++){
-        MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], msgSize[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
     }
+
+    MPI_Waitall(NUM_B, grad_allreduce_reqs, MPI_STATUSES_IGNORE); 
     return 0;
 }
-
-//only communicate with two neighbors in ring topology
-int run_ring(int rank, int np) {
-    int neighborS;
-    int neighborP;
-    MPI_Request request;
-    MPI_Status  status;
-
-    neighborS = (rank+1)%np;
-    neighborP = (rank-1+np)%np;
-    for(int i=0; i<NUM; i++){
-        MPI_Irecv(sum_grad_ptrs[i], msgSize[i], MPI_FLOAT, neighborP, i, MPI_COMM_WORLD, &request);
-        MPI_Send(grad_ptrs[i], msgSize[i], MPI_FLOAT, neighborS, i, MPI_COMM_WORLD);
-        MPI_Wait(&request, &status);
-    }
-    return 0;
-}
-
 
 int main(int argc, char *argv[]){
     int rank, world_size;
-    double begin, elapse;
-
-    for(int i=0; i<NUM; i++){
-        grad_ptrs[i] = (float *)calloc(msgSize[i], sizeof(float));
-        sum_grad_ptrs[i] = (float *)calloc(msgSize[i], sizeof(float));
-    }
-
+    
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm conv_allreduce_comms[NUM_B];
+    for(int i=0; i<NUM_B; i++)
+        MPI_Comm_dup(MPI_COMM_WORLD, &conv_allreduce_comms[i]); //duplicated for nb colls
+
+    float* grad_ptrs[NUM_B];
+    float* sum_grad_ptrs[NUM_B];
+    for(int i=0; i<NUM_B; i++){
+        grad_ptrs[i] = (float *)calloc(allreduce_sizes[i], sizeof(float));
+        sum_grad_ptrs[i] = (float *)calloc(allreduce_sizes[i], sizeof(float));
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
 
     //warmup
-    for(int i=0; i<WARM_UP; i++){
-        run_allreduce();
+    for(int wmp = 0; wmp < WARM_UP; wmp++){
+        run_data_parallel(grad_ptrs, sum_grad_ptrs, conv_allreduce_comms);
     }
 
+    double begin, elapse;
     begin = MPI_Wtime();
-    for(int i=0; i<RUNS; i++){
-        run_allreduce();
+    for(int iter = 0; iter < RUNS; iter++){
+        run_data_parallel(grad_ptrs, sum_grad_ptrs, conv_allreduce_comms);
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
-    printf("Rank = %d, world_size = %d, total_params = %d, ResNet-50 data parallelism (allreduce) runtime for each iteration = %f s\n", rank, world_size, TOTALSIZE, elapse);
 
-    //for(int i=0; i<NUM; i++){
-    //    printf("msgsize[%d] = %d\n", i, msgSize[i]);
-    //}
-
-    //warmup
-    for(int i=0; i<WARM_UP; i++){
-        run_ring(rank, world_size);
+    int total_params = 0;
+    for(int i=0; i<NUM_B; i++){
+	total_params += allreduce_sizes[i];	
     }
 
-    begin = MPI_Wtime();
-    for(int i=0; i<RUNS; i++){
-        run_ring(rank, world_size);
+    if(rank == 0){
+        printf("Rank = %d, world_size = %d, data_shards = %d, total_params = %d, global_batch_size = %d. \n", rank, world_size, world_size, total_params, 128*world_size);
+        printf("ResNet-152 with pure data parallelism runtime for each iteration = %f s. \n", elapse);
     }
-    elapse = (MPI_Wtime()-begin)/RUNS;
-    printf("Rank = %d, world_size = %d, total_params = %d, ResNet-50 data parallelism (neighbors in ring) runtime for each iteration = %f s\n", rank, world_size, TOTALSIZE, elapse);
-
 
     MPI_Finalize();
 }
