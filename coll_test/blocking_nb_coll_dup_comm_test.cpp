@@ -15,13 +15,16 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 512
-#define WARM_UP 10
+#define RUNS 2
+#define WARM_UP 1
 
 // allreduce sizes for gradients with message aggregation
-#define NUM_B 10
-int allreduce_sizes[NUM_B] = {6511592, 6567936, 5905920, 6113280, 6176256, 6112768, 6176256, 6112768, 5321216, 5194816};
+//#define NUM_B 10
+//int allreduce_sizes[NUM_B] = {6511592, 6567936, 5905920, 6113280, 6176256, 6112768, 6176256, 6112768, 5321216, 5194816};
 
+#define NUM_B 10
+int allreduce_sizes[NUM_B] = {65192, 6567936, 59920, 6113280, 6176256, 618, 6176256, 62768, 5321216, 816};
+//int allreduce_sizes[NUM_B] = {1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024};
 // batchsize = 128
 // A100 GPU
 // runtime in us (10E-6) for each iteration 
@@ -43,30 +46,31 @@ int run_data_parallel(float** grad_ptrs, float** sum_grad_ptrs, MPI_Comm* conv_a
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     //printf("commu begin\n");
     int index, flag;
-    for(int i=0; i<NUM_B; i++){
-        MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
-    }
-
-    //if(rank % 2 == 0){
-    //    for(int i=0; i<NUM_B; i++){
-    //        //if(i > 1)
-    //        //    MPI_Testany(NUM_B, grad_allreduce_reqs, &index, &flag, MPI_STATUSES_IGNORE); //advancing MPI in the background
-
-    //        //usleep(bwd_rt_per_B); //compute
-
-    //        //MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
-    //        MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
-    //        //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i]);	
-    //        //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);	
-    //    }
-    //}else{
-    //    for(int i=NUM_B-1; i>=0; i--){
-    //        //MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
-    //        MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
-    //        //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i]);	
-    //        //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);	
-    //    }
+    //for(int i=0; i<NUM_B; i++){
+    //    MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
+    //    //MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
     //}
+
+    if(rank % 2 == 0){
+        for(int i=0; i<NUM_B; i++){
+            //if(i > 1)
+            //    MPI_Testany(NUM_B, grad_allreduce_reqs, &index, &flag, MPI_STATUSES_IGNORE); //advancing MPI in the background
+
+            //usleep(bwd_rt_per_B); //compute
+
+            MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
+            //MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
+            //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i]);	
+            //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);	
+        }
+    }else{
+        for(int i=NUM_B-1; i>=0; i--){
+            MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
+            //MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
+            //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i]);	
+            //MPI_Allreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);	
+        }
+    }
 
     MPI_Waitall(NUM_B, grad_allreduce_reqs, MPI_STATUSES_IGNORE); 
     return 0;
@@ -89,6 +93,13 @@ int main(int argc, char *argv[]){
         sum_grad_ptrs[i] = (float *)calloc(allreduce_sizes[i], sizeof(float));
     }
 
+    for(int i=0; i<NUM_B; i++){
+        for(int j=0; j<allreduce_sizes[i]; j++){
+	    grad_ptrs[i][j] = (float)i;
+	    sum_grad_ptrs[i][j] = 0.0;
+	}
+    }
+
     MPI_Barrier(MPI_COMM_WORLD);
 
     //warmup
@@ -102,6 +113,20 @@ int main(int argc, char *argv[]){
         run_data_parallel(grad_ptrs, sum_grad_ptrs, conv_allreduce_comms);
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
+
+    int error_count = 0;
+    for(int i=0; i<NUM_B; i++){
+        for(int j=0; j<allreduce_sizes[i]; j++){
+	    if(sum_grad_ptrs[i][j] != (float)(i*world_size)){
+		error_count++;
+	    }
+	}
+    }
+
+    if(error_count == 0)
+        printf("Results veryfication PASS\n");
+    else
+        printf("Error Results\n");
 
     int total_params = 0;
     for(int i=0; i<NUM_B; i++){
