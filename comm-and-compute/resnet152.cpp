@@ -35,6 +35,7 @@ int run_data_parallel(float** grad_ptrs, float** sum_grad_ptrs, MPI_Comm* conv_a
 
     //backward
     MPI_Request grad_allreduce_reqs[NUM_B];
+    //must initialize with MPI_REQUEST_NULL
     for(int i=0; i<NUM_B; i++)
         grad_allreduce_reqs[i] = MPI_REQUEST_NULL;
 
