@@ -1,7 +1,7 @@
 /*********************************************************************
  *
- * Description: C++/MPI proxy for GPT2-large distributed training 
- *              with a hybrid pipeline and data parallelism
+ * Description: C++/MPI proxy for GPT3 (175 B) distributed training 
+ *              with a hybrid data, model, and pipeline parallelism
  * Author: Shigang Li
  * Email: shigangli.cs@gmail.com
  *
@@ -15,260 +15,230 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 256
-#define WARM_UP 10
+#define RUNS 128
+#define WARM_UP 8
 
-//p2p msg size for GPT-2 with micro-batch size=1 and seq_length=632
-#define P2PSIZE 808960
+#define NUM_L 96
+#define ACC_STEP_SCALE 2
+#define MODEL_SHARDS 4
 
-#define BEGINSIZE 85317120
-#define INTERSIZE 19677440
-#define ENDSIZE 84008960
+// msg sizes for GPT-3 (M_dim=12288) with micro-batch size=1 and seq_len=2048
+// we set model shards = 4
+#define PIPE_P2P_SIZE       25165824
+#define MP_ALLREDUCE_SIZE   25165824
+#define MOE_ALL2ALL_SIZE    25165824
+//#define DP_ALLREDUCE_SIZE   452984832+154389504
+#define DP_ALLREDUCE_SIZE   452984832 // num params of one shard of a layer
 
-#define MSGAGG 1
+// runtime in us (10E-6) for each model shard of each layer
+#define FWD_RT 15915
+#define BWD_RT 31830
+#define BWD_RT_GPIPE 47745
 
-#ifdef MSGAGG
-//message aggregation
-#define BEGINNUM 1
-#define INTERNUM 1
-#define ENDNUM 1
-int first_layer_grad_sizes[BEGINNUM] = {BEGINSIZE};
-int intermediate_layer_grad_sizes[INTERNUM] = {INTERSIZE};
-int end_layer_grad_sizes[ENDNUM] = {ENDSIZE};
+int run_data_model_pipe(int grad_acc_step, int stage_id, int num_stage,
+    		        float *grad_ptr,
+                        float *sum_grad_ptr,
+                        float *fwd_send_buff,
+                        float *fwd_recv_buff,
+                        float *bwd_send_buff,
+                        float *bwd_recv_buff,
+                        float **mp_fwd_inter_ptrs,
+                        float **sum_mp_fwd_inter_ptrs,
+                        float **mp_bwd_grad_ptrs,
+                        float **sum_mp_bwd_grad_ptrs,
+                        MPI_Comm dp_allreduce_comm,
+                        MPI_Comm mp_allreduce_comm,
+                        MPI_Comm pp_p2p_comm){
 
-#else
-#define BEGINNUM 14
-#define INTERNUM 12
-#define ENDNUM 15
-//sizes for the gradients per layer of gpt-2
-int first_layer_grad_sizes[BEGINNUM] = {64328960, 1310720, 1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 3840, 1280, 1280, 5120, 1280};
-int intermediate_layer_grad_sizes[INTERNUM] = {1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 3840, 1280, 1280, 5120, 1280};
-int end_layer_grad_sizes[ENDNUM] = {1280, 4915200, 1638400, 1280, 6553600, 6553600, 1280, 64328960, 1280, 3840, 1280, 1280, 5120, 1280, 1280};
+    MPI_Request fwd_reqs[2];
+    MPI_Request bwd_reqs[2];
+    for(int i=0; i<2; i++){
+        fwd_reqs[i] = MPI_REQUEST_NULL;
+        bwd_reqs[i] = MPI_REQUEST_NULL;
+    }
 
-#endif
-
-
-
-int run_pipeline(int grad_acc_step, int stage_id, int num_grad_per_stage, 
-		 int num_stage, int allreduce_group_size, 
-		 float **begin_stage_grad_ptrs,
-		 float **sum_begin_stage_grad_ptrs,
-		 float **end_stage_grad_ptrs,
-		 float **sum_end_stage_grad_ptrs,
-		 float **intermediate_stage_grad_ptrs,
-		 float **sum_intermediate_stage_grad_ptrs,
-		 int *stage_grad_sizes,
-		 MPI_Comm p2p_comm, MPI_Comm allreduce_comm){
-
-    float *send_buffer = (float *)calloc(P2PSIZE, sizeof(float));
-    float *recv_buffer = (float *)calloc(P2PSIZE, sizeof(float));
-    
-    //p2p forward
+    //forward
     for(int i=0; i<grad_acc_step; i++){
         if(stage_id == 0){
-            MPI_Request request;
-            MPI_Isend(send_buffer, P2PSIZE, MPI_FLOAT, stage_id+1, i, p2p_comm, &request);
-            MPI_Wait(&request, MPI_STATUS_IGNORE);
+            MPI_Wait(&fwd_reqs[0], MPI_STATUS_IGNORE);
+            usleep(FWD_RT); //compute
+            MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &fwd_reqs[0]);
         }
         else if(stage_id == num_stage-1){
-            MPI_Request request;
-            MPI_Irecv(recv_buffer, P2PSIZE, MPI_FLOAT, stage_id-1, i, p2p_comm, &request);
-            MPI_Wait(&request, MPI_STATUS_IGNORE);
+            MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, i, pp_p2p_comm, &fwd_reqs[1]);
+            MPI_Wait(&fwd_reqs[1], MPI_STATUS_IGNORE);
+            usleep(FWD_RT); //compute
         }
         else{
-            MPI_Request requests[2];
-            MPI_Isend(send_buffer, P2PSIZE, MPI_FLOAT, stage_id+1, i, p2p_comm, &requests[0]);
-            MPI_Irecv(recv_buffer, P2PSIZE, MPI_FLOAT, stage_id-1, i, p2p_comm, &requests[1]);
-            MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
+            MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, i, pp_p2p_comm, &fwd_reqs[1]);
+            MPI_Wait(&fwd_reqs[1], MPI_STATUS_IGNORE);
+            MPI_Wait(&fwd_reqs[0], MPI_STATUS_IGNORE);
+            usleep(FWD_RT); //compute
+            MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &fwd_reqs[0]);
+        }
+        for(int j=0; j<2; j++){
+            MPI_Allreduce(mp_fwd_inter_ptrs[j], sum_mp_fwd_inter_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
         }
     }
-    
-    //p2p backward
+
+    //backward
     for(int i=0; i<grad_acc_step; i++){
         if(stage_id == 0){
-            MPI_Request request;
-            MPI_Irecv(recv_buffer, P2PSIZE, MPI_FLOAT, stage_id+1, i, p2p_comm, &request);
-            MPI_Wait(&request, MPI_STATUS_IGNORE);
+            MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &bwd_reqs[1]);
+            MPI_Wait(&bwd_reqs[1], MPI_STATUS_IGNORE);
+            usleep(BWD_RT); //compute
         }
         else if(stage_id == num_stage-1){
-            MPI_Request request;
-            MPI_Isend(send_buffer, P2PSIZE, MPI_FLOAT, stage_id-1, i, p2p_comm, &request);
-            MPI_Wait(&request, MPI_STATUS_IGNORE);
+            MPI_Wait(&bwd_reqs[0], MPI_STATUS_IGNORE);
+            usleep(BWD_RT); //compute
+            MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, i, pp_p2p_comm, &bwd_reqs[0]);
         }
         else{
-            MPI_Request requests[2];
-            MPI_Isend(send_buffer, P2PSIZE, MPI_FLOAT, stage_id-1, i, p2p_comm, &requests[0]);
-            MPI_Irecv(recv_buffer, P2PSIZE, MPI_FLOAT, stage_id+1, i, p2p_comm, &requests[1]);
-            MPI_Waitall(2, requests, MPI_STATUSES_IGNORE);
+            MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &bwd_reqs[1]);
+            MPI_Wait(&bwd_reqs[1], MPI_STATUS_IGNORE);
+            MPI_Wait(&bwd_reqs[0], MPI_STATUS_IGNORE);
+            usleep(BWD_RT); //compute
+            MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, i, pp_p2p_comm, &bwd_reqs[0]);
+        }
+        for(int j=0; j<2; j++){
+            MPI_Allreduce(mp_bwd_grad_ptrs[j], sum_mp_bwd_grad_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
         }
     }
-    
-    //allreduce on gradients
-    if(allreduce_group_size > 1){
-        if(stage_id == 0){
-            for(int i=0; i<num_grad_per_stage; i++){
-                MPI_Allreduce(begin_stage_grad_ptrs[i], sum_begin_stage_grad_ptrs[i], stage_grad_sizes[i], MPI_FLOAT, MPI_SUM, allreduce_comm);
-            }
-        }
-        else if(stage_id == num_stage-1){
-            for(int i=0; i<num_grad_per_stage; i++){
-                MPI_Allreduce(end_stage_grad_ptrs[i], sum_end_stage_grad_ptrs[i], stage_grad_sizes[i], MPI_FLOAT, MPI_SUM, allreduce_comm);
-            }
-        }
-        else{
-            for(int i=0; i<num_grad_per_stage; i++){
-                MPI_Allreduce(intermediate_stage_grad_ptrs[i], sum_intermediate_stage_grad_ptrs[i], stage_grad_sizes[i], MPI_FLOAT, MPI_SUM, allreduce_comm);
-            }
-        }
-    }
+
+    MPI_Allreduce(grad_ptr, sum_grad_ptr, DP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, dp_allreduce_comm);
+
     return 0;
 }
+
 
 int main(int argc, char *argv[]){
     int rank, world_size;
     double begin, elapse;
     
-    //number of basic Transformer layers
-    int num_layer = 48;
     //number of pipeline stages
-    int num_stage = 4;
+    int num_stage = NUM_L;
+    int num_layer = NUM_L;
+    int acc_step_scale = ACC_STEP_SCALE;
     //number of micro-batches in an iteration
-    int grad_acc_step = 8;
+    int grad_acc_step = num_stage * acc_step_scale;
 
+    if(argc == 2){
+        num_stage = atoi(argv[1]);
+        num_layer = atoi(argv[1]);
+    }
     if(argc == 3){
+        num_stage = atoi(argv[1]);
         num_layer = atoi(argv[1]);
-        num_stage = atoi(argv[2]);
+        acc_step_scale = atoi(argv[2]);
+        grad_acc_step = num_stage * acc_step_scale;
     }
-    if(argc == 4){
-        num_layer = atoi(argv[1]);
-        num_stage = atoi(argv[2]);
-        grad_acc_step = atoi(argv[3]);
-    }
-    
+
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm allreduce_comm;
-    MPI_Comm p2p_comm;
-    int allreduce_group_rank, p2p_group_rank;
-    int allreduce_group_size, p2p_group_size;
+    MPI_Comm dp_allreduce_comm;
+    MPI_Comm mp_pp_comm;
+    MPI_Comm mp_allreduce_comm;
+    MPI_Comm pp_p2p_comm;
 
-    //the number of processes should be a multiple of num_stage
-    assert(world_size%num_stage == 0);
-    int allreduce_group_color = rank % num_stage;
+    //the number of processes should be a multiple of num_stage*MODEL_SHARDS = 384
+    assert(world_size % (num_stage*MODEL_SHARDS) == 0);
 
-    MPI_Comm_split(MPI_COMM_WORLD, allreduce_group_color, rank, &allreduce_comm);
-    MPI_Comm_rank(allreduce_comm, &allreduce_group_rank);
-    MPI_Comm_size(allreduce_comm, &allreduce_group_size);
+    int dp_allreduce_group_rank, mp_pp_group_rank, mp_allreduce_group_rank, pp_p2p_group_rank;
+    int dp_allreduce_group_size, mp_pp_group_size, mp_allreduce_group_size, pp_p2p_group_size;
 
-    MPI_Comm_split(MPI_COMM_WORLD, allreduce_group_rank, rank, &p2p_comm);
-    MPI_Comm_rank(p2p_comm, &p2p_group_rank);
-    MPI_Comm_size(p2p_comm, &p2p_group_size);
+    int dp_allreduce_group_color = rank % (num_stage*MODEL_SHARDS);
+    MPI_Comm_split(MPI_COMM_WORLD, dp_allreduce_group_color, rank, &dp_allreduce_comm);
+    MPI_Comm_rank(dp_allreduce_comm, &dp_allreduce_group_rank);
+    MPI_Comm_size(dp_allreduce_comm, &dp_allreduce_group_size);
 
-    int stage_id = allreduce_group_color;
-    assert(allreduce_group_color == p2p_group_rank);
+    MPI_Comm_split(MPI_COMM_WORLD, dp_allreduce_group_rank, rank, &mp_pp_comm);
+    MPI_Comm_rank(mp_pp_comm, &mp_pp_group_rank);
+    MPI_Comm_size(mp_pp_comm, &mp_pp_group_size);
 
+    int mp_allreduce_group_color = mp_pp_group_rank % num_stage;
+    MPI_Comm_split(mp_pp_comm, mp_allreduce_group_color, mp_pp_group_rank, &mp_allreduce_comm);
 
-    int num_layer_per_stage = (int)(num_layer/num_stage);
+    MPI_Comm_rank(mp_allreduce_comm, &mp_allreduce_group_rank);
+    MPI_Comm_size(mp_allreduce_comm, &mp_allreduce_group_size);
 
-    int begin_stage_grad_num = BEGINNUM + (num_layer_per_stage - 1)*INTERNUM;
-    int end_stage_grad_num = ENDNUM + (num_layer_per_stage - 1)*INTERNUM;
-    int inter_stage_grad_num = num_layer_per_stage * INTERNUM;
+    MPI_Comm_split(mp_pp_comm, mp_allreduce_group_rank, mp_pp_group_rank, &pp_p2p_comm);
+    MPI_Comm_rank(pp_p2p_comm, &pp_p2p_group_rank);
+    MPI_Comm_size(pp_p2p_comm, &pp_p2p_group_size);
 
-    //pointers of the send/receive buffers
-    float* begin_stage_grad_ptrs[begin_stage_grad_num];
-    float* sum_begin_stage_grad_ptrs[begin_stage_grad_num];
-    
-    float* intermediate_stage_grad_ptrs[inter_stage_grad_num];
-    float* sum_intermediate_stage_grad_ptrs[inter_stage_grad_num];
-    
-    float* end_stage_grad_ptrs[end_stage_grad_num];
-    float* sum_end_stage_grad_ptrs[end_stage_grad_num];
+    assert(pp_p2p_group_size == num_stage);
+    assert(mp_allreduce_group_size == MODEL_SHARDS);
+    assert(dp_allreduce_group_size == world_size/(num_stage*MODEL_SHARDS));
 
-    int num_grad_per_stage = -1;
-    if(stage_id == 0){
-        num_grad_per_stage = BEGINNUM + (num_layer_per_stage-1) * INTERNUM;
+    int stage_id = pp_p2p_group_rank;
+
+    float* grad_ptr = (float *)calloc(DP_ALLREDUCE_SIZE, sizeof(float));
+    float* sum_grad_ptr = (float *)calloc(DP_ALLREDUCE_SIZE, sizeof(float));
+
+    float* fwd_send_buff = (float *)calloc(PIPE_P2P_SIZE, sizeof(float));
+    float* fwd_recv_buff = (float *)calloc(PIPE_P2P_SIZE, sizeof(float));
+    float* bwd_send_buff = (float *)calloc(PIPE_P2P_SIZE, sizeof(float));
+    float* bwd_recv_buff = (float *)calloc(PIPE_P2P_SIZE, sizeof(float));
+
+    float* mp_fwd_inter_ptrs[2];
+    float* sum_mp_fwd_inter_ptrs[2];
+    float* mp_bwd_grad_ptrs[2];
+    float* sum_mp_bwd_grad_ptrs[2];
+    for(int i=0; i<2; i++){
+        mp_fwd_inter_ptrs[i] = (float *)calloc(MP_ALLREDUCE_SIZE, sizeof(float));
+        sum_mp_fwd_inter_ptrs[i] = (float *)calloc(MP_ALLREDUCE_SIZE, sizeof(float));
+        mp_bwd_grad_ptrs[i] = (float *)calloc(MP_ALLREDUCE_SIZE, sizeof(float));
+        sum_mp_bwd_grad_ptrs[i] = (float *)calloc(MP_ALLREDUCE_SIZE, sizeof(float));
     }
-    else if(stage_id == num_stage-1){
-        num_grad_per_stage = ENDNUM + (num_layer_per_stage-1) * INTERNUM;
-    }
-    else{
-        num_grad_per_stage = num_layer_per_stage * INTERNUM;
+     
+    float* moe_fwd_alltoall_ptrs[2];
+    float* moe_bwd_alltoall_ptrs[2];
+    for(int i=0; i<2; i++){
+        moe_fwd_alltoall_ptrs[i] = (float *)calloc(MOE_ALL2ALL_SIZE, sizeof(float));
+        moe_bwd_alltoall_ptrs[i] = (float *)calloc(MOE_ALL2ALL_SIZE, sizeof(float));
     }
 
-    //int stage_grad_sizes[num_grad_per_stage] = {0}; 
-    int stage_grad_sizes[num_grad_per_stage]; 
-
-    if(stage_id == 0){
-        for(int i=0; i<BEGINNUM; i++){
-            begin_stage_grad_ptrs[i] = (float *)calloc(first_layer_grad_sizes[i], sizeof(float));
-            sum_begin_stage_grad_ptrs[i] = (float *)calloc(first_layer_grad_sizes[i], sizeof(float));
-            stage_grad_sizes[i] = first_layer_grad_sizes[i];
-        }
-        for(int j=0; j<num_layer_per_stage-1; j++){
-            for(int k=0; k<INTERNUM; k++){
-                begin_stage_grad_ptrs[INTERNUM*j+k+BEGINNUM] = (float *)calloc(intermediate_layer_grad_sizes[k], sizeof(float));
-                sum_begin_stage_grad_ptrs[INTERNUM*j+k+BEGINNUM] = (float *)calloc(intermediate_layer_grad_sizes[k], sizeof(float));
-                stage_grad_sizes[INTERNUM*j+k+BEGINNUM] = intermediate_layer_grad_sizes[k];                
-            }
-        }
-    }
-    else if(stage_id == num_stage-1){
-        for(int j=0; j<num_layer_per_stage-1; j++){
-            for(int k=0; k<INTERNUM; k++){
-                end_stage_grad_ptrs[INTERNUM*j+k] = (float *)calloc(intermediate_layer_grad_sizes[k], sizeof(float));
-                sum_end_stage_grad_ptrs[INTERNUM*j+k] = (float *)calloc(intermediate_layer_grad_sizes[k], sizeof(float));
-                stage_grad_sizes[INTERNUM*j+k] = intermediate_layer_grad_sizes[k];                
-            }
-        }
-        for(int i=0; i<ENDNUM; i++){
-            end_stage_grad_ptrs[INTERNUM*(num_layer_per_stage-1)+i] = (float *)calloc(end_layer_grad_sizes[i], sizeof(float));
-            sum_end_stage_grad_ptrs[INTERNUM*(num_layer_per_stage-1)+i] = (float *)calloc(end_layer_grad_sizes[i], sizeof(float));
-            stage_grad_sizes[INTERNUM*(num_layer_per_stage-1)+i] = end_layer_grad_sizes[i]; 
-        }
-    }
-    else{
-        for(int j=0; j<num_layer_per_stage; j++){
-            for(int k=0; k<INTERNUM; k++){
-                intermediate_stage_grad_ptrs[INTERNUM*j+k] = (float *)calloc(intermediate_layer_grad_sizes[k], sizeof(float));
-                sum_intermediate_stage_grad_ptrs[INTERNUM*j+k] = (float *)calloc(intermediate_layer_grad_sizes[k], sizeof(float));
-                stage_grad_sizes[INTERNUM*j+k] = intermediate_layer_grad_sizes[k];                
-            }
-        }
-    }
     MPI_Barrier(MPI_COMM_WORLD);
 
     //warmup
     for(int wmp = 0; wmp < WARM_UP; wmp++){
-        run_pipeline(grad_acc_step, stage_id, num_grad_per_stage,
-		     num_stage, allreduce_group_size, 
-            	     begin_stage_grad_ptrs,
-            	     sum_begin_stage_grad_ptrs,
-            	     end_stage_grad_ptrs,
-            	     sum_end_stage_grad_ptrs,
-            	     intermediate_stage_grad_ptrs,
-            	     sum_intermediate_stage_grad_ptrs,
-            	     stage_grad_sizes,
-            	     p2p_comm, allreduce_comm);
+        run_data_model_pipe(grad_acc_step, stage_id, num_stage,
+        		    grad_ptr,
+                            sum_grad_ptr,
+                            fwd_send_buff,
+                            fwd_recv_buff,
+                            bwd_send_buff,
+                            bwd_recv_buff,
+                            mp_fwd_inter_ptrs,
+                            sum_mp_fwd_inter_ptrs,
+                            mp_bwd_grad_ptrs,
+                            sum_mp_bwd_grad_ptrs,
+                            dp_allreduce_comm,
+                            mp_allreduce_comm,
+                            pp_p2p_comm);
     }
 
     begin = MPI_Wtime();
     for(int iter = 0; iter < RUNS; iter++){
-        run_pipeline(grad_acc_step, stage_id, num_grad_per_stage,
-		     num_stage, allreduce_group_size, 
-            	     begin_stage_grad_ptrs,
-            	     sum_begin_stage_grad_ptrs,
-            	     end_stage_grad_ptrs,
-            	     sum_end_stage_grad_ptrs,
-            	     intermediate_stage_grad_ptrs,
-            	     sum_intermediate_stage_grad_ptrs,
-            	     stage_grad_sizes,
-            	     p2p_comm, allreduce_comm);
+        run_data_model_pipe(grad_acc_step, stage_id, num_stage,
+        		    grad_ptr,
+                            sum_grad_ptr,
+                            fwd_send_buff,
+                            fwd_recv_buff,
+                            bwd_send_buff,
+                            bwd_recv_buff,
+                            mp_fwd_inter_ptrs,
+                            sum_mp_fwd_inter_ptrs,
+                            mp_bwd_grad_ptrs,
+                            sum_mp_bwd_grad_ptrs,
+                            dp_allreduce_comm,
+                            mp_allreduce_comm,
+                            pp_p2p_comm);
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
-    //printf("num_msg: begin_layer %d, inter_layer %d, end_layer %d \n", BEGINNUM, INTERNUM, ENDNUM);
-    printf("Rank = %d, world_size = %d, layers = %d, stages = %d, total_params = %d, GPT2-large pipeline and data parallelism runtime for each iteration = %f s\n", rank, world_size, num_layer, num_stage, BEGINSIZE+ENDSIZE+INTERSIZE*(num_layer-2), elapse);
+    if(rank == 0)
+        printf("1F1B: Rank = %d, world_size = %d, layers = %d, stages = %d, acc_step = %d, total_params = %d B, global batch = %d, GPT-3 DP-MP-PP runtime for each iteration = %f s\n", rank, world_size, num_layer, num_stage, grad_acc_step, 1811939328/1024*num_layer/1024/1024, world_size*acc_step_scale/MODEL_SHARDS, elapse);
 
     MPI_Finalize();
 }
