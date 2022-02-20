@@ -15,11 +15,11 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 8
-#define WARM_UP 2
+#define RUNS 128
+#define WARM_UP 8
 
-#define NUM_L 4
-#define ACC_STEP_SCALE 4
+#define NUM_L 96
+#define ACC_STEP_SCALE 2
 #define MODEL_SHARDS 4
 
 // msg sizes for GPT-3 (M_dim=12288) with micro-batch size=1 and seq_len=2048
@@ -76,9 +76,9 @@ int run_data_model_pipe(int grad_acc_step, int stage_id, int num_stage,
             usleep(FWD_RT); //compute
             MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &fwd_reqs[0]);
         }
-        //for(int j=0; j<2; j++){
-        //    MPI_Allreduce(mp_fwd_inter_ptrs[j], sum_mp_fwd_inter_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
-        //}
+        for(int j=0; j<2; j++){
+            MPI_Allreduce(mp_fwd_inter_ptrs[j], sum_mp_fwd_inter_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
+        }
     }
 
     for(int i=0; i<grad_acc_step; i++){
@@ -99,12 +99,12 @@ int run_data_model_pipe(int grad_acc_step, int stage_id, int num_stage,
             usleep(BWD_RT); //compute
             MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, i, pp_p2p_comm, &bwd_reqs[0]);
         }
-        //for(int j=0; j<2; j++){
-        //    MPI_Allreduce(mp_bwd_grad_ptrs[j], sum_mp_bwd_grad_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
-        //}
+        for(int j=0; j<2; j++){
+            MPI_Allreduce(mp_bwd_grad_ptrs[j], sum_mp_bwd_grad_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
+        }
     }
 
-    //MPI_Allreduce(grad_ptr, sum_grad_ptr, DP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, dp_allreduce_comm);
+    MPI_Allreduce(grad_ptr, sum_grad_ptr, DP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, dp_allreduce_comm);
 
     return 0;
 }
@@ -116,8 +116,21 @@ int main(int argc, char *argv[]){
     
     //number of pipeline stages
     int num_stage = NUM_L;
+    int num_layer = NUM_L;
+    int acc_step_scale = ACC_STEP_SCALE;
     //number of micro-batches in an iteration
-    int grad_acc_step = num_stage * ACC_STEP_SCALE;
+    int grad_acc_step = num_stage * acc_step_scale;
+
+    if(argc == 2){
+        num_stage = atoi(argv[1]);
+        num_layer = atoi(argv[1]);
+    }
+    if(argc == 3){
+        num_stage = atoi(argv[1]);
+        num_layer = atoi(argv[1]);
+        acc_step_scale = atoi(argv[2]);
+        grad_acc_step = num_stage * acc_step_scale;
+    }
 
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
@@ -224,7 +237,7 @@ int main(int argc, char *argv[]){
     elapse = (MPI_Wtime()-begin)/RUNS;
 
     if(rank == 0)
-        printf("1F1B: Rank = %d, world_size = %d, layers = %d, stages = %d, acc_step = %d, total_params = %d B, global batch = %d, GPT-3 DP-MP-PP runtime for each iteration = %f s\n", rank, world_size, NUM_L, num_stage, grad_acc_step, 1811939328/1024*NUM_L/1024/1024, world_size*ACC_STEP_SCALE/MODEL_SHARDS, elapse);
+        printf("1F1B: Rank = %d, world_size = %d, layers = %d, stages = %d, acc_step = %d, total_params = %d B, global batch = %d, GPT-3 DP-MP-PP runtime for each iteration = %f s\n", rank, world_size, num_layer, num_stage, grad_acc_step, 1811939328/1024*num_layer/1024/1024, world_size*acc_step_scale/MODEL_SHARDS, elapse);
 
     MPI_Finalize();
 }
