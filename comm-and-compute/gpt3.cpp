@@ -81,6 +81,7 @@ int run_data_model_pipe(int grad_acc_step, int stage_id, int num_stage,
         }
     }
 
+    //backward
     for(int i=0; i<grad_acc_step; i++){
         if(stage_id == 0){
             MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &bwd_reqs[1]);
