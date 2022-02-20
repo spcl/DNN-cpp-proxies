@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 512
-#define WARM_UP 10
+#define WARM_UP 8
+#define RUNS 128
 
 #define NUM_L 8
 // we set model shards = 4
