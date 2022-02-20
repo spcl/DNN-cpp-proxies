@@ -53,6 +53,7 @@ int run_data_model_pipe(int grad_acc_step, int stage_id, int num_stage,
     int num_bwd_fwd_in_p2 = grad_acc_step - num_stage + stage_id;
     int num_bwd_in_p3 = num_stage - stage_id;
 
+    //deadlock since cyclic dep
     for(int i=0; i<num_fwd_in_p1; i++){
         if(stage_id == 0){
             MPI_Request request;
