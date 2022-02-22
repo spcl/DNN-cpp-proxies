@@ -64,8 +64,7 @@ int run_model_data_parallel(float** fwd_halo_send_buff0_ptrs,
                             float** grad_ptrs,
                             float** sum_grad_ptrs,
 		            MPI_Comm model_parallel_comm,
-		            MPI_Comm dense_allreduce_comm,
-		            MPI_Comm* conv_allreduce_comms){
+		            MPI_Comm dense_allreduce_comm){
 
     
     //forward
@@ -118,7 +117,7 @@ int run_model_data_parallel(float** fwd_halo_send_buff0_ptrs,
             MPI_Iallreduce(grad_ptrs[0], sum_grad_ptrs[0], allreduce_sizes[0], MPI_FLOAT, MPI_SUM, dense_allreduce_comm, &grad_allreduce_reqs[0]);	
 	}
 	else if(i > NUM_Dense_L-1){
-            MPI_Iallreduce(grad_ptrs[i-NUM_Dense_L+1], sum_grad_ptrs[i-NUM_Dense_L+1], allreduce_sizes[i-NUM_Dense_L+1], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i-NUM_Dense_L], &grad_allreduce_reqs[i-NUM_Dense_L+1]);	
+            MPI_Iallreduce(grad_ptrs[i-NUM_Dense_L+1], sum_grad_ptrs[i-NUM_Dense_L+1], allreduce_sizes[i-NUM_Dense_L+1], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i-NUM_Dense_L+1]);	
 	}
     }
 
@@ -134,9 +133,6 @@ int main(int argc, char *argv[]){
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm conv_allreduce_comms[NUM_Conv_L];
-    for(int i=0; i<NUM_Conv_L; i++)
-        MPI_Comm_dup(MPI_COMM_WORLD, &conv_allreduce_comms[i]); //duplicated for nb colls
 
     int dense_allreduce_group_rank, mp_group_rank;
     int dense_allreduce_group_size, mp_group_size;
@@ -217,8 +213,7 @@ int main(int argc, char *argv[]){
                                 grad_ptrs,
                                 sum_grad_ptrs,
                                 model_parallel_comm,
-                                dense_allreduce_comm,
-                                conv_allreduce_comms);
+                                dense_allreduce_comm);
     }
 
     double begin, elapse;
@@ -239,8 +234,7 @@ int main(int argc, char *argv[]){
                                 grad_ptrs,
                                 sum_grad_ptrs,
                                 model_parallel_comm,
-                                dense_allreduce_comm,
-                                conv_allreduce_comms);
+                                dense_allreduce_comm);
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
