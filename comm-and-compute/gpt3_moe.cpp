@@ -15,10 +15,11 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 128
-#define WARM_UP 8
+#define RUNS 64
+#define WARM_UP 4
 
 #define NUM_L 96
+#define NUM_MOE 16
 #define ACC_STEP_SCALE 2
 
 // msg sizes for GPT-3 (M_dim=12288) with micro-batch size=1 and seq_len=2048
@@ -37,6 +38,8 @@
 int run_data_moe_pipe(int grad_acc_step, int stage_id, int num_stage, int num_moe,
     		      float *grad_ptr,
                       float *sum_grad_ptr,
+    		      float *moe_grad_ptr,
+                      float *sum_moe_grad_ptr,
                       float *fwd_send_buff,
                       float *fwd_recv_buff,
                       float *bwd_send_buff,
@@ -45,8 +48,10 @@ int run_data_moe_pipe(int grad_acc_step, int stage_id, int num_stage, int num_mo
                       float **moe_fwd_alltoall_recv_ptrs,
                       float **moe_bwd_alltoall_send_ptrs,
                       float **moe_bwd_alltoall_recv_ptrs,
-                      MPI_Comm dp_moe_comm,
-                      MPI_Comm pp_p2p_comm){
+                      MPI_Comm dp_allreduce_comm,
+                      MPI_Comm pp_p2p_comm,
+                      MPI_Comm moe_alltoall_comm,
+                      MPI_Comm moe_allreduce_comm){
 
     MPI_Request fwd_reqs[2];
     MPI_Request bwd_reqs[2];
@@ -78,7 +83,7 @@ int run_data_moe_pipe(int grad_acc_step, int stage_id, int num_stage, int num_mo
             MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, i, pp_p2p_comm, &fwd_reqs[0]);
         }
         for(int j=0; j<2; j++){
-            MPI_Alltoall(moe_fwd_alltoall_send_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_fwd_alltoall_recv_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, dp_moe_comm);
+            MPI_Alltoall(moe_fwd_alltoall_send_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_fwd_alltoall_recv_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_alltoall_comm);
         }
     }
 
@@ -105,11 +110,12 @@ int run_data_moe_pipe(int grad_acc_step, int stage_id, int num_stage, int num_mo
             MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, i, pp_p2p_comm, &bwd_reqs[0]);
         }
         for(int j=0; j<2; j++){
-            MPI_Alltoall(moe_bwd_alltoall_send_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_bwd_alltoall_recv_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, dp_moe_comm);
+            MPI_Alltoall(moe_bwd_alltoall_send_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_bwd_alltoall_recv_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_alltoall_comm);
         }
     }
 
-    MPI_Allreduce(grad_ptr, sum_grad_ptr, MHA_SIZE, MPI_FLOAT, MPI_SUM, dp_moe_comm);
+    MPI_Allreduce(moe_grad_ptr, sum_moe_grad_ptr, MLP_SIZE/num_moe, MPI_FLOAT, MPI_SUM, moe_allreduce_comm);
+    MPI_Allreduce(grad_ptr, sum_grad_ptr, MHA_SIZE, MPI_FLOAT, MPI_SUM, dp_allreduce_comm);
 
     return 0;
 }
@@ -140,32 +146,49 @@ int main(int argc, char *argv[]){
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm dp_moe_comm;
+    MPI_Comm dp_allreduce_comm;
     MPI_Comm pp_p2p_comm;
+    MPI_Comm moe_alltoall_comm;
+    MPI_Comm moe_allreduce_comm;
 
+    int num_moe = NUM_MOE;
     //the number of processes should be a multiple of num_stage
-    assert(world_size % num_stage == 0);
-    int num_moe = world_size / num_stage;
+    assert(world_size % (num_stage * num_moe) == 0);
 
-    int dp_moe_group_rank, pp_p2p_group_rank;
-    int dp_moe_group_size, pp_p2p_group_size;
+    int dp_group_rank, pp_p2p_group_rank;
+    int dp_group_size, pp_p2p_group_size;
+    int moe_allreduce_group_rank, moe_alltoall_group_rank;
+    int moe_allreduce_group_size, moe_alltoall_group_size;
 
-    int dp_moe_group_color = rank % num_stage;
-    MPI_Comm_split(MPI_COMM_WORLD, dp_moe_group_color, rank, &dp_moe_comm);
-    MPI_Comm_rank(dp_moe_comm, &dp_moe_group_rank);
-    MPI_Comm_size(dp_moe_comm, &dp_moe_group_size);
+    int dp_group_color = rank % num_stage;
+    MPI_Comm_split(MPI_COMM_WORLD, dp_group_color, rank, &dp_allreduce_comm);
+    MPI_Comm_rank(dp_allreduce_comm, &dp_group_rank);
+    MPI_Comm_size(dp_allreduce_comm, &dp_group_size);
 
-    MPI_Comm_split(MPI_COMM_WORLD, dp_moe_group_rank, rank, &pp_p2p_comm);
+    MPI_Comm_split(MPI_COMM_WORLD, dp_group_rank, rank, &pp_p2p_comm);
     MPI_Comm_rank(pp_p2p_comm, &pp_p2p_group_rank);
     MPI_Comm_size(pp_p2p_comm, &pp_p2p_group_size);
 
+    int moe_allreduce_group_color = dp_group_rank % num_moe;
+    MPI_Comm_split(dp_allreduce_comm, moe_allreduce_group_color, dp_group_rank, &moe_allreduce_comm);
+
+    MPI_Comm_rank(moe_allreduce_comm, &moe_allreduce_group_rank);
+    MPI_Comm_size(moe_allreduce_comm, &moe_allreduce_group_size);
+
+    MPI_Comm_split(dp_allreduce_comm, moe_allreduce_group_rank, dp_group_rank, &moe_alltoall_comm);
+    MPI_Comm_rank(moe_alltoall_comm, &moe_alltoall_group_rank);
+    MPI_Comm_size(moe_alltoall_comm, &moe_alltoall_group_size);
+
     assert(pp_p2p_group_size == num_stage);
-    assert(dp_moe_group_size == num_moe);
+    assert(moe_alltoall_group_size == num_moe);
+    assert(dp_group_size == num_moe * moe_allreduce_group_size);
 
     int stage_id = pp_p2p_group_rank;
 
     float* grad_ptr = (float *)calloc(MHA_SIZE, sizeof(float));
     float* sum_grad_ptr = (float *)calloc(MHA_SIZE, sizeof(float));
+    float* moe_grad_ptr = (float *)calloc(MLP_SIZE/num_moe, sizeof(float));
+    float* sum_moe_grad_ptr = (float *)calloc(MLP_SIZE/num_moe, sizeof(float));
 
     float* fwd_send_buff = (float *)calloc(PIPE_P2P_SIZE, sizeof(float));
     float* fwd_recv_buff = (float *)calloc(PIPE_P2P_SIZE, sizeof(float));
@@ -190,6 +213,8 @@ int main(int argc, char *argv[]){
         run_data_moe_pipe(grad_acc_step, stage_id, num_stage, num_moe,
         		  grad_ptr,
                           sum_grad_ptr,
+        		  moe_grad_ptr,
+                          sum_moe_grad_ptr,
                           fwd_send_buff,
                           fwd_recv_buff,
                           bwd_send_buff,
@@ -198,8 +223,10 @@ int main(int argc, char *argv[]){
 			  moe_fwd_alltoall_recv_ptrs,
 			  moe_bwd_alltoall_send_ptrs,
 			  moe_bwd_alltoall_recv_ptrs,
-                          dp_moe_comm,
-                          pp_p2p_comm);
+                          dp_allreduce_comm,
+                          pp_p2p_comm,
+                          moe_alltoall_comm,
+                          moe_allreduce_comm);
     }
 
     begin = MPI_Wtime();
@@ -207,6 +234,8 @@ int main(int argc, char *argv[]){
         run_data_moe_pipe(grad_acc_step, stage_id, num_stage, num_moe,
         		  grad_ptr,
                           sum_grad_ptr,
+        		  moe_grad_ptr,
+                          sum_moe_grad_ptr,
                           fwd_send_buff,
                           fwd_recv_buff,
                           bwd_send_buff,
@@ -215,8 +244,10 @@ int main(int argc, char *argv[]){
 			  moe_fwd_alltoall_recv_ptrs,
 			  moe_bwd_alltoall_send_ptrs,
 			  moe_bwd_alltoall_recv_ptrs,
-                          dp_moe_comm,
-                          pp_p2p_comm);
+                          dp_allreduce_comm,
+                          pp_p2p_comm,
+                          moe_alltoall_comm,
+                          moe_allreduce_comm);
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
