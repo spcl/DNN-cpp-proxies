@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 64
+#define RUNS 128
 #define WARM_UP 4
 
 #define NUM_L 96
