@@ -29,7 +29,7 @@ int allreduce_sizes[NUM_B] = {6511592, 6567936, 5905920, 6113280, 6176256, 61127
 int fwd_rt_whole_model = 119000;
 int bwd_rt_per_B = 23800;
 
-int run_data_parallel(float** grad_ptrs, float** sum_grad_ptrs, MPI_Comm* conv_allreduce_comms){
+int run_data_parallel(float** grad_ptrs, float** sum_grad_ptrs){
     
     //forward
     usleep(fwd_rt_whole_model); //compute
@@ -47,7 +47,7 @@ int run_data_parallel(float** grad_ptrs, float** sum_grad_ptrs, MPI_Comm* conv_a
 
         usleep(bwd_rt_per_B); //compute
 
-        MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, conv_allreduce_comms[i], &grad_allreduce_reqs[i]);	
+        MPI_Iallreduce(grad_ptrs[i], sum_grad_ptrs[i], allreduce_sizes[i], MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD, &grad_allreduce_reqs[i]);	
     }
 
     MPI_Waitall(NUM_B, grad_allreduce_reqs, MPI_STATUSES_IGNORE); 
@@ -60,9 +60,6 @@ int main(int argc, char *argv[]){
     MPI_Init(&argc,&argv);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm conv_allreduce_comms[NUM_B];
-    for(int i=0; i<NUM_B; i++)
-        MPI_Comm_dup(MPI_COMM_WORLD, &conv_allreduce_comms[i]); //duplicated for nb colls
 
     float* grad_ptrs[NUM_B];
     float* sum_grad_ptrs[NUM_B];
@@ -75,13 +72,13 @@ int main(int argc, char *argv[]){
 
     //warmup
     for(int wmp = 0; wmp < WARM_UP; wmp++){
-        run_data_parallel(grad_ptrs, sum_grad_ptrs, conv_allreduce_comms);
+        run_data_parallel(grad_ptrs, sum_grad_ptrs);
     }
 
     double begin, elapse;
     begin = MPI_Wtime();
     for(int iter = 0; iter < RUNS; iter++){
-        run_data_parallel(grad_ptrs, sum_grad_ptrs, conv_allreduce_comms);
+        run_data_parallel(grad_ptrs, sum_grad_ptrs);
     }
     elapse = (MPI_Wtime()-begin)/RUNS;
 
