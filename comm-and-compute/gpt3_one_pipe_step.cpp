@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include <assert.h>
 
-#define RUNS 1
 #define WARM_UP 0
+#define RUNS 1
 
 #define NUM_L 96
 #define ACC_STEP_SCALE 2
@@ -27,24 +27,24 @@
 #define BWD_RT_GPIPE 47745
 
 int run_one_step_pipe_model(int grad_acc_step, int stage_id, int num_stage,
-    		        float *grad_ptr,
-                        float *sum_grad_ptr,
-                        float *fwd_send_buff,
-                        float *fwd_recv_buff,
-                        float *bwd_send_buff,
-                        float *bwd_recv_buff,
-                        float **mp_fwd_inter_ptrs,
-                        float **sum_mp_fwd_inter_ptrs,
-                        float **mp_bwd_grad_ptrs,
-                        float **sum_mp_bwd_grad_ptrs,
-                        MPI_Comm dp_allreduce_comm,
-                        MPI_Comm mp_allreduce_comm,
-                        MPI_Comm pp_p2p_comm){
+    		            float *grad_ptr,
+                            float *sum_grad_ptr,
+                            float *fwd_send_buff,
+                            float *fwd_recv_buff,
+                            float *bwd_send_buff,
+                            float *bwd_recv_buff,
+                            float **mp_fwd_inter_ptrs,
+                            float **sum_mp_fwd_inter_ptrs,
+                            float **mp_bwd_grad_ptrs,
+                            float **sum_mp_bwd_grad_ptrs,
+                            MPI_Comm dp_allreduce_comm,
+                            MPI_Comm mp_allreduce_comm,
+                            MPI_Comm pp_p2p_comm){
 
     MPI_Request reqs[2];
 
-    if(stage_id % 2 == 0){ //compute fwd then bwd
-        usleep(FWD_RT); //compute
+    if(stage_id % 2 == 0){
+        usleep(FWD_RT); //compute fwd
         for(int j=0; j<2; j++){
             MPI_Allreduce(mp_fwd_inter_ptrs[j], sum_mp_fwd_inter_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
         }
@@ -52,13 +52,8 @@ int run_one_step_pipe_model(int grad_acc_step, int stage_id, int num_stage,
         MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 1, pp_p2p_comm, &reqs[0]);
         MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 2, pp_p2p_comm, &reqs[1]);
         MPI_Waitall(2, reqs, MPI_STATUS_IGNORE);
-
-        usleep(BWD_RT); //compute
-        for(int j=0; j<2; j++){
-            MPI_Allreduce(mp_bwd_grad_ptrs[j], sum_mp_bwd_grad_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
-        }
-    }else{ //compute bwd then fwd
-        usleep(BWD_RT); //compute
+    }else{ 
+        usleep(BWD_RT); //compute bwd
         for(int j=0; j<2; j++){
             MPI_Allreduce(mp_bwd_grad_ptrs[j], sum_mp_bwd_grad_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
         }
@@ -66,11 +61,6 @@ int run_one_step_pipe_model(int grad_acc_step, int stage_id, int num_stage,
         MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 1, pp_p2p_comm, &reqs[0]);
         MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 2, pp_p2p_comm, &reqs[1]);
         MPI_Waitall(2, reqs, MPI_STATUS_IGNORE);
-
-        usleep(FWD_RT); //compute
-        for(int j=0; j<2; j++){
-            MPI_Allreduce(mp_fwd_inter_ptrs[j], sum_mp_fwd_inter_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
-        }
     }
 
     return 0;
