@@ -48,6 +48,7 @@ int run_one_step_pipe_moe(int grad_acc_step, int stage_id, int num_stage, int nu
     MPI_Request reqs[2];
 
     if(stage_id % 2 == 0){
+        MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 1, pp_p2p_comm, &reqs[0]); //receive input of next mb
         usleep(FWD_MHA); //compute fwd
         usleep(FWD_MLP/num_moe);
 
@@ -55,10 +56,10 @@ int run_one_step_pipe_moe(int grad_acc_step, int stage_id, int num_stage, int nu
             MPI_Alltoall(moe_fwd_alltoall_send_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_fwd_alltoall_recv_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_alltoall_comm);
         }
 
-        MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 1, pp_p2p_comm, &reqs[0]);
-        MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 2, pp_p2p_comm, &reqs[1]);
+        MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 2, pp_p2p_comm, &reqs[1]); //send output of current mb
         MPI_Waitall(2, reqs, MPI_STATUS_IGNORE);
     }else{ 
+        MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 2, pp_p2p_comm, &reqs[1]); //receive input of next mb
         usleep(BWD_MHA); //compute bwd
         usleep(BWD_MLP/num_moe);
 
@@ -66,8 +67,7 @@ int run_one_step_pipe_moe(int grad_acc_step, int stage_id, int num_stage, int nu
             MPI_Alltoall(moe_bwd_alltoall_send_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_bwd_alltoall_recv_ptrs[j], MOE_ALL2ALL_SIZE/num_moe, MPI_FLOAT, moe_alltoall_comm);
         }
 
-        MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 1, pp_p2p_comm, &reqs[0]);
-        MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 2, pp_p2p_comm, &reqs[1]);
+        MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 1, pp_p2p_comm, &reqs[0]); //send output of current mb
         MPI_Waitall(2, reqs, MPI_STATUS_IGNORE);
     }
 

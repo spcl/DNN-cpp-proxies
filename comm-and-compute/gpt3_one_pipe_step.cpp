@@ -44,22 +44,20 @@ int run_one_step_pipe_model(int grad_acc_step, int stage_id, int num_stage,
     MPI_Request reqs[2];
 
     if(stage_id % 2 == 0){
+        MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 1, pp_p2p_comm, &reqs[0]);// receive input for next mb
         usleep(FWD_RT); //compute fwd
         for(int j=0; j<2; j++){
             MPI_Allreduce(mp_fwd_inter_ptrs[j], sum_mp_fwd_inter_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
         }
-
-        MPI_Irecv(bwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 1, pp_p2p_comm, &reqs[0]);
-        MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 2, pp_p2p_comm, &reqs[1]);
+        MPI_Isend(fwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id+1, 2, pp_p2p_comm, &reqs[1]);// send output of current mb
         MPI_Waitall(2, reqs, MPI_STATUS_IGNORE);
     }else{ 
+        MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 2, pp_p2p_comm, &reqs[1]);// receive input for next mb
         usleep(BWD_RT); //compute bwd
         for(int j=0; j<2; j++){
             MPI_Allreduce(mp_bwd_grad_ptrs[j], sum_mp_bwd_grad_ptrs[j], MP_ALLREDUCE_SIZE, MPI_FLOAT, MPI_SUM, mp_allreduce_comm);
         }
-
-        MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 1, pp_p2p_comm, &reqs[0]);
-        MPI_Irecv(fwd_recv_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 2, pp_p2p_comm, &reqs[1]);
+        MPI_Isend(bwd_send_buff, PIPE_P2P_SIZE, MPI_FLOAT, stage_id-1, 1, pp_p2p_comm, &reqs[0]);// send output of current mb
         MPI_Waitall(2, reqs, MPI_STATUS_IGNORE);
     }
 
