@@ -2,8 +2,6 @@
  *
  * Description: C++/MPI proxy for CosmoFlow model distributed training 
  *              with a hybrid of model and data parallelism
- * Author: Shigang Li
- * Email: shigangli.cs@gmail.com
  *
  *********************************************************************/
 

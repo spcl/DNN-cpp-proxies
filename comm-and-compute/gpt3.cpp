@@ -2,8 +2,6 @@
  *
  * Description: C++/MPI proxy for GPT3 (175 B) distributed training 
  *              with a hybrid data, model, and pipeline parallelism
- * Author: Shigang Li
- * Email: shigangli.cs@gmail.com
  *
  *********************************************************************/
 
